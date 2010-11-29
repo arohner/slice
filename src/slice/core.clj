@@ -1,6 +1,7 @@
 (ns slice.core
   (:use [clojure.contrib.ns-utils :only (immigrate)]
         [clojure.contrib.def :only (defn-memo)])
+  (:use [clj-blocks.utils :only (defn-map* decompose-defn-args*)])
   (:require [clojure.walk])
   (:require [hiccup.core :as hiccup]
             [hiccup.page-helpers :as page-helpers]
@@ -84,26 +85,25 @@
   "Defines a slice. Slices are functions. If their arglist is empty it can be
   ommited. Their body is merged into a map, so top-level forms in a slice
   should return a map"
-  [name args & body]
-  (let [body (if (vector? args) body (cons args body))
-        args (if (vector? args) args [])
+  [& slice-args]
+  (let [arg-map (apply decompose-defn-args* slice-args)
+        body (:body arg-map)
+        arg-map (update-in arg-map [:params] #(if (vector? %) % [])) 
         impure? (or (some :impure (map #(meta (if (slice? %)
                                                 %
                                                 (if (list? %)
                                                   (resolve (symbol (first %)))
                                                   (resolve (symbol %)))))
                                        body))
-                    (:impure (meta name)))]
-    (if *slice-memoize*
-      (if impure?
-        `(let [var# (defn ~name ~args (slices ~@body))]
-           (alter-meta! var# assoc :impure true)
-           var#)
-        (if (= args [])
-          `(let [val# (slices ~@body)]
-             (defn ~name [] val#))
-          `(defn-memo ~name ~args (slices ~@body))))
-      `(defn ~name ~args (slices ~@body)))))
+                    (:impure (meta name)))
+        arg-map (update-in arg-map [:attr-map] assoc :impure impure?)
+        pure? (not impure?)
+        can-memoize? (and pure? (= 0 (count (:params arg-map))))
+        body-slices `(slices ~@(:body arg-map))
+        arg-map (assoc arg-map :body body-slices)]
+    (if (and *slice-memoize* can-memoize?)
+      `(defn-memo ~@(defn-map* arg-map))
+      `(defn ~@(defn-map* arg-map)))))
 
 (defn-memo render-int
   ([sl]
